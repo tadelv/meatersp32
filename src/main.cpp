@@ -1,11 +1,18 @@
 #include <Arduino.h>
+#include <MAX31855.h>
+#ifdef ESP_PLATFORM
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <NimBLEServer.h>
-
 #define DEBUG_SERIAL Serial
-static NimBLEServer *pServer;
+#else
+#define DEBUG_SERIAL Serial1
+#endif
 
+MAX31855 thermocouple(MCS_PIN, MDO_PIN, MCLK_PIN);
+
+#ifdef ESP_PLATFORM
+static NimBLEServer *pServer;
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *pServer) {
     DEBUG_SERIAL.println("Client connected");
@@ -38,6 +45,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 void initBT() {
+
   NimBLEDevice::init("MEATER ESP32");
 #ifdef ESP_PLATFORM
   NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
@@ -73,12 +81,32 @@ void initBT() {
 
   DEBUG_SERIAL.println("Advertising Started");
 }
+#else
+void initBT() {
+  DEBUG_SERIAL.println("Bluetooth not supported on this platform");
+}
+#endif
 
 std::vector<uint8_t> getTemperature() {
+  int status = thermocouple.read();
+  DEBUG_SERIAL.printf("status: %d\n", status);
   std::vector<uint8_t> temperature;
-	// read actual temperature from sensor
-  double tipTemperature = 50.0;
+  // read actual temperature from sensor
+  float tipTemperature = 50.0;
+  if (status != STATUS_OK) {
+		DEBUG_SERIAL.println("Error reading thermocouple!");
+		return temperature;
+  }
 
+    float temp = thermocouple.getTemperature(); // thermocouple.getInternal();
+		DEBUG_SERIAL.printf("probe: ");
+    DEBUG_SERIAL.println(temp);
+    /*DEBUG_SERIAL.printf("Internal Temp: %.2f\n", temp);*/
+    tipTemperature = temp;
+    float internal = thermocouple.getInternal();
+		DEBUG_SERIAL.printf("internal: ");
+    DEBUG_SERIAL.println(internal);
+    /*DEBUG_SERIAL.printf("Internal Temp: %.2f\n", internal);*/
   // Reverse the process to get temperatureRawStatus[0] and
   // temperatureRawStatus[1]
   int tempSum = static_cast<int>(tipTemperature * 16 - 8);
@@ -90,17 +118,25 @@ std::vector<uint8_t> getTemperature() {
 }
 
 void setup() {
+  delay(1000);
   DEBUG_SERIAL.begin(115200);
   DEBUG_SERIAL.println("Starting BLE work!");
   initBT();
+
+  delay(500);
+  thermocouple.begin();
 }
 
 void loop() {
   delay(2000);
+#ifdef ESP_PLATFORM
   NimBLEService *tempService =
       pServer->getServiceByUUID("a75cc7fc-c956-488f-ac2a-2dbc08b63a04");
   NimBLECharacteristic *temperatureCharacteristic =
       tempService->getCharacteristic("7edda774-045e-4bbf-909b-45d1991a2876");
   temperatureCharacteristic->setValue(getTemperature());
   temperatureCharacteristic->notify();
+#else
+  getTemperature();
+#endif
 }
