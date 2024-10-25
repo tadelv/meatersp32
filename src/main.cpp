@@ -1,6 +1,8 @@
+#include "AverageThermistor.h"
+#include "NTC_Thermistor.h"
 #include <Arduino.h>
-#include <MAX31855.h>
-#ifdef ESP_PLATFORM
+#include <MAX6675.h>
+#ifndef STM32
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <NimBLEServer.h>
@@ -9,9 +11,10 @@
 #define DEBUG_SERIAL Serial1
 #endif
 
-MAX31855 thermocouple(MCS_PIN, MDO_PIN, MCLK_PIN);
+MAX6675 thermocouple(MCS_PIN, MDO_PIN, MCLK_PIN);
 
-#ifdef ESP_PLATFORM
+Thermistor *thermistor;
+#ifndef STM32
 static NimBLEServer *pServer;
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *pServer) {
@@ -88,25 +91,26 @@ void initBT() {
 #endif
 
 std::vector<uint8_t> getTemperature() {
+  float last = thermocouple.getTemperature();
   int status = thermocouple.read();
   DEBUG_SERIAL.printf("status: %d\n", status);
   std::vector<uint8_t> temperature;
   // read actual temperature from sensor
-  float tipTemperature = 50.0;
-  if (status != STATUS_OK) {
-		DEBUG_SERIAL.println("Error reading thermocouple!");
-		return temperature;
-  }
-
+  float tipTemperature = 25.7;
+  if (status == STATUS_OK) {
     float temp = thermocouple.getTemperature(); // thermocouple.getInternal();
-		DEBUG_SERIAL.printf("probe: ");
+    DEBUG_SERIAL.printf("probe: ");
     DEBUG_SERIAL.println(temp);
     /*DEBUG_SERIAL.printf("Internal Temp: %.2f\n", temp);*/
-    tipTemperature = temp;
-    float internal = thermocouple.getInternal();
-		DEBUG_SERIAL.printf("internal: ");
-    DEBUG_SERIAL.println(internal);
+    /*tipTemperature = temp;*/
+    /*float internal = thermocouple.getInternal();*/
+    /*DEBUG_SERIAL.printf("internal: ");*/
+    /*DEBUG_SERIAL.println(internal);*/
     /*DEBUG_SERIAL.printf("Internal Temp: %.2f\n", internal);*/
+  } else {
+    DEBUG_SERIAL.println("Error reading thermocouple!");
+  }
+
   // Reverse the process to get temperatureRawStatus[0] and
   // temperatureRawStatus[1]
   int tempSum = static_cast<int>(tipTemperature * 16 - 8);
@@ -116,25 +120,50 @@ std::vector<uint8_t> getTemperature() {
   temperature.push_back(temperatureRawStatus1);
   return temperature;
 }
+double R1 = 10000.0;  // voltage divider resistor value
+double Beta = 3950.0; // Beta value
+double To = 298.15;   // Temperature in Kelvin for 25 degree Celsius
+double Ro = 0.0;      // Resistance of Thermistor at 25 degree Celsius
+int ThermistorPin = 10;
+double adcMax = 4095.0;
+double Vs = 3.3;
+
+std::vector<uint8_t> readNTC() {
+  std::vector<uint8_t> temperature;
+  const double Tc = thermistor->readCelsius();
+	/*const int resistorValue = 10000;*/
+	/*int sensorValue = analogRead(10);*/
+	/*float resistance = resistorValue / ((1023.0 / sensorValue) - 1.0);*/
+	/*float Tc = log(resistance / 220000.0) / 3950.0 + 1.0 / (25 + 273.15);*/
+  DEBUG_SERIAL.println(Tc);
+
+  int tempSum = static_cast<int>(Tc * 16 - 8);
+  int temperatureRawStatus1 = static_cast<int>(std::floor(tempSum / 256.0));
+  int temperatureRawStatus0 = tempSum - temperatureRawStatus1 * 256;
+  temperature.push_back(temperatureRawStatus0);
+  temperature.push_back(temperatureRawStatus1);
+  return temperature;
+}
 
 void setup() {
-  delay(1000);
+  delay(3000);
   DEBUG_SERIAL.begin(115200);
   DEBUG_SERIAL.println("Starting BLE work!");
   initBT();
 
   delay(500);
-  thermocouple.begin();
+	thermistor = new NTC_Thermistor_ESP32(10, 10, 220000, 25, 3950, 3300, 4095);
+  /*thermocouple.begin();*/
 }
 
 void loop() {
-  delay(2000);
-#ifdef ESP_PLATFORM
+  delay(1000);
+#ifndef STM32
   NimBLEService *tempService =
       pServer->getServiceByUUID("a75cc7fc-c956-488f-ac2a-2dbc08b63a04");
   NimBLECharacteristic *temperatureCharacteristic =
       tempService->getCharacteristic("7edda774-045e-4bbf-909b-45d1991a2876");
-  temperatureCharacteristic->setValue(getTemperature());
+  temperatureCharacteristic->setValue(readNTC());
   temperatureCharacteristic->notify();
 #else
   getTemperature();
